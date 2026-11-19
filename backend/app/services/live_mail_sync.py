@@ -151,7 +151,9 @@ class LiveMailSyncService:
             "batch_year": profile.batch_year if profile else settings.student_batch,
             "tenth_percentage": profile.tenth_percentage if profile else settings.student_10th,
             "twelfth_percentage": profile.twelfth_percentage if profile else settings.student_12th,
-            "current_cgpa": profile.current_cgpa if profile else settings.student_cgpa
+            "current_cgpa": profile.current_cgpa if profile else settings.student_cgpa,
+            "standing_arrears": profile.standing_arrears if profile else settings.student_arrears,
+            "history_arrears": getattr(profile, "history_arrears", True)
         }
 
         clean_pw = app_pw.replace(" ", "").strip()
@@ -180,212 +182,232 @@ class LiveMailSyncService:
             applied_list = [c.company_name for c in db.query(AppliedCompany).all()]
 
             for m_id in target_ids:
-                res, msg_data = mail.fetch(m_id, "(RFC822)")
-                if res != "OK" or not msg_data or not msg_data[0]:
-                    continue
+                try:
+                    res, msg_data = mail.fetch(m_id, "(RFC822)")
+                    if res != "OK" or not msg_data or not msg_data[0]:
+                        continue
 
-                raw_email = msg_data[0][1]
-                msg = email.message_from_bytes(raw_email)
+                    raw_email = msg_data[0][1]
+                    msg = email.message_from_bytes(raw_email)
 
-                subject = cls.clean_header_str(msg.get("Subject", "(No Subject)"))
-                sender = cls.clean_header_str(msg.get("From", ""))
-                recipient = cls.clean_header_str(msg.get("To", email_addr))
-                msg_uid = cls.clean_header_str(msg.get("Message-ID", f"imap_{m_id.decode()}"))
-                in_reply_to = cls.clean_header_str(msg.get("In-Reply-To", ""))
+                    subject = cls.clean_header_str(msg.get("Subject", "(No Subject)"))
+                    sender = cls.clean_header_str(msg.get("From", ""))
+                    recipient = cls.clean_header_str(msg.get("To", email_addr))
+                    msg_uid = cls.clean_header_str(msg.get("Message-ID", f"imap_{m_id.decode()}"))
+                    in_reply_to = cls.clean_header_str(msg.get("In-Reply-To", ""))
 
-                existing_msg = db.query(EmailMessage).filter(EmailMessage.message_id == msg_uid).first()
-                if existing_msg:
-                    continue
+                    existing_msg = db.query(EmailMessage).filter(EmailMessage.message_id == msg_uid).first()
+                    if existing_msg:
+                        continue
 
-                body_text = ""
-                body_html = ""
-                saved_attachments = []
+                    body_text = ""
+                    body_html = ""
+                    saved_attachments = []
 
-                if msg.is_multipart():
-                    for part in msg.walk():
-                        content_type = part.get_content_type()
-                        content_disposition = str(part.get("Content-Disposition", ""))
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            content_type = part.get_content_type()
+                            content_disposition = str(part.get("Content-Disposition", ""))
 
-                        if "attachment" in content_disposition or part.get_filename():
-                            filename = cls.clean_header_str(part.get_filename())
-                            if filename:
-                                file_ext = os.path.splitext(filename)[1].lower()
-                                safe_name = f"{uuid.uuid4().hex[:8]}_{filename}"
-                                file_path = os.path.join(DOWNLOADS_DIR, safe_name)
+                            if "attachment" in content_disposition or part.get_filename():
+                                filename = cls.clean_header_str(part.get_filename())
+                                if filename:
+                                    file_ext = os.path.splitext(filename)[1].lower()
+                                    safe_name = f"{uuid.uuid4().hex[:8]}_{filename}"
+                                    file_path = os.path.join(DOWNLOADS_DIR, safe_name)
+                                    payload = part.get_payload(decode=True)
+                                    if payload:
+                                        with open(file_path, "wb") as f:
+                                            f.write(payload)
+                                        saved_attachments.append({
+                                            "filename": filename,
+                                            "file_type": file_ext,
+                                            "file_path": file_path
+                                        })
+                            elif content_type == "text/plain" and not body_text:
                                 payload = part.get_payload(decode=True)
                                 if payload:
-                                    with open(file_path, "wb") as f:
-                                        f.write(payload)
-                                    saved_attachments.append({
-                                        "filename": filename,
-                                        "file_type": file_ext,
-                                        "file_path": file_path
-                                    })
-                        elif content_type == "text/plain" and not body_text:
-                            payload = part.get_payload(decode=True)
-                            if payload:
-                                try:
-                                    body_text = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
-                                except Exception:
-                                    body_text = payload.decode("latin-1", errors="ignore")
-                        elif content_type == "text/html" and not body_html:
-                            payload = part.get_payload(decode=True)
-                            if payload:
-                                try:
-                                    body_html = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
-                                except Exception:
-                                    body_html = payload.decode("latin-1", errors="ignore")
-                else:
-                    content_type = msg.get_content_type()
-                    payload = msg.get_payload(decode=True)
-                    if payload:
-                        decoded = ""
+                                    try:
+                                        body_text = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
+                                    except Exception:
+                                        body_text = payload.decode("latin-1", errors="ignore")
+                            elif content_type == "text/html" and not body_html:
+                                payload = part.get_payload(decode=True)
+                                if payload:
+                                    try:
+                                        body_html = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
+                                    except Exception:
+                                        body_html = payload.decode("latin-1", errors="ignore")
+                    else:
+                        content_type = msg.get_content_type()
+                        payload = msg.get_payload(decode=True)
+                        if payload:
+                            decoded = ""
+                            try:
+                                decoded = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
+                            except Exception:
+                                decoded = payload.decode("latin-1", errors="ignore")
+                            if content_type == "text/html":
+                                body_html = decoded
+                                body_text = re.sub(r'<[^>]+>', ' ', decoded)
+                            else:
+                                body_text = decoded
+
+                    parsed_attachments = []
+                    search_terms = [profile_dict["roll_number"], profile_dict["neopat_id"], profile_dict["name"]]
+                    for att in saved_attachments:
+                        parse_res = AttachmentParser.parse_and_search(att["file_path"], search_terms)
+                        parsed_attachments.append({
+                            "filename": att["filename"],
+                            "file_type": att["file_type"],
+                            "file_path": att["file_path"],
+                            "matches": parse_res["matches"],
+                            "preview": parse_res["preview"],
+                            "total_pages": parse_res.get("total_pages", 1)
+                        })
+
+                    date_header = msg.get("Date")
+                    received_dt = datetime.utcnow()
+                    if date_header:
                         try:
-                            decoded = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
+                            parsed_dt = email.utils.parsedate_to_datetime(date_header)
+                            if parsed_dt:
+                                received_dt = parsed_dt.astimezone(timezone.utc).replace(tzinfo=None)
                         except Exception:
-                            decoded = payload.decode("latin-1", errors="ignore")
-                        if content_type == "text/html":
-                            body_html = decoded
-                            body_text = re.sub(r'<[^>]+>', ' ', decoded)
-                        else:
-                            body_text = decoded
+                            pass
 
-                parsed_attachments = []
-                search_terms = [profile_dict["roll_number"], profile_dict["neopat_id"], profile_dict["name"]]
-                for att in saved_attachments:
-                    parse_res = AttachmentParser.parse_and_search(att["file_path"], search_terms)
-                    parsed_attachments.append({
-                        "filename": att["filename"],
-                        "file_type": att["file_type"],
-                        "file_path": att["file_path"],
-                        "matches": parse_res["matches"],
-                        "preview": parse_res["preview"],
-                        "total_pages": parse_res.get("total_pages", 1)
-                    })
-
-                date_header = msg.get("Date")
-                received_dt = datetime.utcnow()
-                if date_header:
-                    try:
-                        parsed_dt = email.utils.parsedate_to_datetime(date_header)
-                        if parsed_dt:
-                            received_dt = parsed_dt.astimezone(timezone.utc).replace(tzinfo=None)
-                    except Exception:
-                        pass
-
-                temp_eval = RelevanceEngine.evaluate_email(
-                    subject=subject,
-                    body=body_text,
-                    attachments_data=parsed_attachments,
-                    profile_data=profile_dict,
-                    body_html=body_html,
-                    sender=sender,
-                    applied_companies=applied_list
-                )
-
-                thread, is_new_thread = ThreadTracker.get_or_create_thread(
-                    db=db,
-                    subject=subject,
-                    sender=sender,
-                    in_reply_to=in_reply_to,
-                    detected_company=temp_eval.get("company_name"),
-                    received_at=received_dt
-                )
-
-                prev_messages = ThreadTracker.get_thread_history(db, thread.thread_id)
-
-                evaluation = RelevanceEngine.evaluate_email(
-                    subject=subject,
-                    body=body_text,
-                    attachments_data=parsed_attachments,
-                    profile_data=profile_dict,
-                    body_html=body_html,
-                    sender=sender,
-                    applied_companies=applied_list,
-                    previous_thread_messages=prev_messages
-                )
-
-                final_company = evaluation.get("company_name") or thread.company_name
-
-                new_msg_record = EmailMessage(
-                    message_id=msg_uid,
-                    thread_id=thread.thread_id,
-                    subject=subject,
-                    sender=sender,
-                    recipient=recipient,
-                    body_text=body_text,
-                    body_html=body_html,
-                    received_at=received_dt,
-                    priority=evaluation["priority"],
-                    category=evaluation["category"],
-                    company_name=final_company,
-                    venues=evaluation.get("venues", []),
-                    slots=evaluation.get("slots", []),
-                    action_links=evaluation.get("links", []),
-                    deadline_date_time=evaluation.get("deadline_date_time"),
-                    schedule_date_time=evaluation.get("schedule_date_time"),
-                    reason=evaluation["reason"],
-                    matched_identity=evaluation["matched_identity"],
-                    matched_identity_details=evaluation.get("matched_identity_details", []),
-                    matched_applied_company=evaluation.get("matched_applied_company", False),
-                    eligibility_status=evaluation.get("eligibility_status", "Neutral"),
-                    eligibility_notes=evaluation.get("eligibility_notes", "")
-                )
-                db.add(new_msg_record)
-                db.commit()
-                db.refresh(new_msg_record)
-
-                for att in parsed_attachments:
-                    has_m = len(att.get("matches", [])) > 0
-                    db_att = Attachment(
-                        message_id=msg_uid,
-                        filename=att["filename"],
-                        file_type=att["file_type"],
-                        file_path=att["file_path"],
-                        extracted_text_preview=att.get("preview", ""),
-                        has_match=has_m,
-                        match_locations=att.get("matches", []),
-                        total_pages=att.get("total_pages", 1)
+                    temp_eval = RelevanceEngine.evaluate_email(
+                        subject=subject,
+                        body=body_text,
+                        attachments_data=parsed_attachments,
+                        profile_data=profile_dict,
+                        body_html=body_html,
+                        sender=sender,
+                        applied_companies=applied_list
                     )
-                    db.add(db_att)
-                db.commit()
 
-                if final_company:
-                    ThreadTracker.update_company_status_from_thread(db, final_company, evaluation, subject)
+                    thread, is_new_thread = ThreadTracker.get_or_create_thread(
+                        db=db,
+                        subject=subject,
+                        sender=sender,
+                        in_reply_to=in_reply_to,
+                        detected_company=temp_eval.get("company_name"),
+                        received_at=received_dt
+                    )
 
-                # Send Telegram Notification
-                if evaluation.get("telegram_notify") and evaluation.get("telegram_message"):
-                    new_alerts += 1
-                    notifier.send_telegram_alert(evaluation["telegram_message"])
+                    prev_messages = ThreadTracker.get_thread_history(db, thread.thread_id)
 
-                # Trigger In-App Sound and Broadcast WebSockets
-                if evaluation.get("trigger_sound"):
-                    sound_choice = profile.custom_sound if profile else "urgent_ping"
-                    log_entry = NotificationLog(
+                    evaluation = RelevanceEngine.evaluate_email(
+                        subject=subject,
+                        body=body_text,
+                        attachments_data=parsed_attachments,
+                        profile_data=profile_dict,
+                        body_html=body_html,
+                        sender=sender,
+                        applied_companies=applied_list,
+                        previous_thread_messages=prev_messages
+                    )
+
+                    final_company = evaluation.get("company_name") or thread.company_name
+
+                    new_msg_record = EmailMessage(
                         message_id=msg_uid,
-                        title=f"[{evaluation['priority'].upper()}] {subject}",
-                        content=evaluation["reason"],
+                        thread_id=thread.thread_id,
+                        subject=subject,
+                        sender=sender,
+                        recipient=recipient,
+                        body_text=body_text,
+                        body_html=body_html,
+                        received_at=received_dt,
                         priority=evaluation["priority"],
-                        notification_type="Sound + Telegram Push",
-                        sound_played=sound_choice
+                        category=evaluation["category"],
+                        company_name=final_company,
+                        venues=evaluation.get("venues", []),
+                        slots=evaluation.get("slots", []),
+                        action_links=evaluation.get("links", []),
+                        deadline_date_time=evaluation.get("deadline_date_time"),
+                        schedule_date_time=evaluation.get("schedule_date_time"),
+                        reason=evaluation["reason"],
+                        matched_identity=evaluation["matched_identity"],
+                        matched_identity_details=evaluation.get("matched_identity_details", []),
+                        matched_applied_company=evaluation.get("matched_applied_company", False),
+                        eligibility_status=evaluation.get("eligibility_status", "Neutral"),
+                        eligibility_notes=evaluation.get("eligibility_notes", "")
                     )
-                    db.add(log_entry)
+                    db.add(new_msg_record)
+                    db.commit()
+                    db.refresh(new_msg_record)
+
+                    for att in parsed_attachments:
+                        has_m = len(att.get("matches", [])) > 0
+                        db_att = Attachment(
+                            message_id=msg_uid,
+                            filename=att["filename"],
+                            file_type=att["file_type"],
+                            file_path=att["file_path"],
+                            extracted_text_preview=att.get("preview", ""),
+                            has_match=has_m,
+                            match_locations=att.get("matches", []),
+                            total_pages=att.get("total_pages", 1)
+                        )
+                        db.add(db_att)
                     db.commit()
 
-                    alert_payload = {
-                        "type": "NEW_ALERT",
-                        "priority": evaluation["priority"],
-                        "sound": sound_choice,
-                        "sound_type": evaluation.get("sound_type", "urgent_ping"),
-                        "title": f"[{evaluation['priority'].upper()}] {subject}",
-                        "reason": evaluation["reason"],
-                        "thread_id": thread.thread_id,
-                        "company_name": final_company,
-                        "received_at": datetime.utcnow().isoformat()
-                    }
-                    notifier.broadcast_alert_sync(alert_payload)
+                    # Update thread metadata so frontend always has the evaluated status
+                    thread.latest_received_at = received_dt
+                    if evaluation["priority"] in ["Critical", "High"] or thread.priority in ["Low", None, ""]:
+                        thread.priority = evaluation["priority"]
+                    thread.category = evaluation["category"]
+                    thread.status_summary = evaluation["reason"]
+                    if evaluation.get("matched_identity"):
+                        thread.has_identity_match = True
+                    if final_company:
+                        thread.company_name = final_company
+                    db.commit()
 
-                synced_count += 1
+                    if final_company:
+                        ThreadTracker.update_company_status_from_thread(db, final_company, evaluation, subject)
+
+                    # Send Telegram Notification
+                    if evaluation.get("telegram_notify") and evaluation.get("telegram_message"):
+                        new_alerts += 1
+                        try:
+                            notifier.send_telegram_alert(evaluation["telegram_message"])
+                        except Exception as tg_ex:
+                            logger.error(f"Failed to dispatch telegram notification: {tg_ex}")
+
+                    # Trigger In-App Sound and Broadcast WebSockets
+                    if evaluation.get("trigger_sound"):
+                        sound_choice = profile.custom_sound if profile else "urgent_ping"
+                        log_entry = NotificationLog(
+                            message_id=msg_uid,
+                            title=f"[{evaluation['priority'].upper()}] {subject}",
+                            content=evaluation["reason"],
+                            priority=evaluation["priority"],
+                            notification_type="Sound + Telegram Push",
+                            sound_played=sound_choice
+                        )
+                        db.add(log_entry)
+                        db.commit()
+
+                        alert_payload = {
+                            "type": "NEW_ALERT",
+                            "priority": evaluation["priority"],
+                            "sound": sound_choice,
+                            "sound_type": evaluation.get("sound_type", "urgent_ping"),
+                            "title": f"[{evaluation['priority'].upper()}] {subject}",
+                            "reason": evaluation["reason"],
+                            "thread_id": thread.thread_id,
+                            "company_name": final_company,
+                            "received_at": datetime.utcnow().isoformat()
+                        }
+                        notifier.broadcast_alert_sync(alert_payload)
+
+                    synced_count += 1
+                except Exception as msg_err:
+                    db.rollback()
+                    logger.error(f"Error processing email message {m_id}: {msg_err}")
+                    continue
 
             mail.logout()
 

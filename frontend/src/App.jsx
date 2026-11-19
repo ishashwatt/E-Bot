@@ -52,8 +52,88 @@ export default function App() {
     }
   };
 
-  const importantMails = threads.filter(t => t.priority === 'Critical' || t.priority === 'High' || t.has_identity_match || t.is_applied_company);
-  const backgroundMails = threads.filter(t => t.priority !== 'Critical' && t.priority !== 'High' && !t.has_identity_match && !t.is_applied_company);
+  const isPlacementOrAcademic = (t) => {
+    if (t.priority === 'Critical' || t.priority === 'High') return true;
+    if (t.has_identity_match || t.is_applied_company) return true;
+    if (t.category && !['General', 'General Circular'].includes(t.category)) return true;
+    return false;
+  };
+
+  const importantMails = threads.filter(isPlacementOrAcademic);
+  const backgroundMails = threads.filter(t => !isPlacementOrAcademic(t));
+
+  const getBadgeInfo = (item) => {
+    if (item.priority === 'Critical' || item.has_identity_match) {
+      return {
+        label: '🎯 Shortlisted',
+        className: 'badge-critical',
+        border: '4px solid #ef4444',
+        accentBg: 'var(--accent-ruby-light)',
+        accentColor: 'var(--accent-ruby)'
+      };
+    }
+    if (item.category === 'Pre-Placement Talk / Event Update' || item.category?.includes('Pre-Placement')) {
+      return {
+        label: '📢 Pre-Placement Talk',
+        className: 'badge-high',
+        border: '4px solid #06b6d4',
+        accentBg: '#ecfeff',
+        accentColor: '#0891b2'
+      };
+    }
+    if (item.category === 'Eligible Placement Drive') {
+      return {
+        label: '✅ Eligible Drive',
+        className: 'badge-high',
+        border: '4px solid #10b981',
+        accentBg: '#ecfdf5',
+        accentColor: '#059669'
+      };
+    }
+    if (item.category === 'Ineligible Placement Drive') {
+      return {
+        label: '❌ Not Eligible',
+        className: 'badge-medium',
+        border: '4px solid #f43f5e',
+        accentBg: '#fff1f2',
+        accentColor: '#e11d48'
+      };
+    }
+    if (item.category === 'Not Shortlisted for Test / Round') {
+      return {
+        label: 'ℹ️ Not Shortlisted',
+        className: 'badge-medium',
+        border: '4px solid #8b5cf6',
+        accentBg: 'var(--accent-violet-light)',
+        accentColor: 'var(--accent-violet)'
+      };
+    }
+    if (item.category?.includes('Academic') || item.category?.includes('Program Chair')) {
+      return {
+        label: '🏛️ Academic Notice',
+        className: 'badge-high',
+        border: '4px solid #3b82f6',
+        accentBg: '#eff6ff',
+        accentColor: '#2563eb'
+      };
+    }
+    if (item.category?.includes('CDC') || item.category?.includes('Placement Office')) {
+      return {
+        label: '📢 Placement Office Update',
+        className: 'badge-high',
+        border: '4px solid #f59e0b',
+        accentBg: 'var(--accent-amber-light)',
+        accentColor: 'var(--accent-amber)'
+      };
+    }
+    return {
+      label: '⚠️ Placement Update',
+      className: 'badge-high',
+      border: '4px solid var(--accent-amber)',
+      accentBg: 'var(--accent-amber-light)',
+      accentColor: 'var(--accent-amber)'
+    };
+  };
 
   return (
     <div className="app-layout">
@@ -162,21 +242,23 @@ export default function App() {
                 const isExpanded = expandedId === item.id;
                 const isCritical = item.priority === 'Critical' || item.has_identity_match;
 
+                const badge = getBadgeInfo(item);
+
                 return (
                   <div
                     key={item.id}
                     className="light-card"
                     style={{
                       padding: '1.25rem',
-                      borderLeft: isCritical ? '4px solid var(--accent-ruby)' : '4px solid var(--accent-amber)',
+                      borderLeft: badge.border,
                       background: 'var(--bg-secondary)'
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
                       <div style={{ flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                          <span className={isCritical ? 'badge-critical' : 'badge-high'}>
-                            {isCritical ? '🎯 Name / Roll No Found' : '⚠️ Important Placement Update'}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
+                          <span className={badge.className} style={{ background: badge.accentBg, color: badge.accentColor }}>
+                            {badge.label}
                           </span>
                           {item.company_name && (
                             <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: '4px' }}>
@@ -189,10 +271,9 @@ export default function App() {
                           {item.subject}
                         </h3>
 
-                        {}
                         <div style={{
-                          background: isCritical ? 'var(--accent-ruby-light)' : 'var(--accent-amber-light)',
-                          color: isCritical ? 'var(--accent-ruby)' : 'var(--accent-amber)',
+                          background: badge.accentBg,
+                          color: badge.accentColor,
                           fontSize: '0.8rem',
                           fontWeight: 600,
                           padding: '0.5rem 0.75rem',

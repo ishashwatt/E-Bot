@@ -25,8 +25,9 @@ class Settings(BaseModel):
     student_batch: int = int(os.getenv("STUDENT_BATCH", "2027"))
     student_10th: float = float(os.getenv("STUDENT_10TH", "72.6"))
     student_12th: float = float(os.getenv("STUDENT_12TH", "69.0"))
-    student_cgpa: float = float(os.getenv("STUDENT_CGPA", "7.85"))
+    student_cgpa: float = float(os.getenv("STUDENT_CGPA", "7.87"))
     student_arrears: int = int(os.getenv("STUDENT_STANDING_ARREARS", "0"))
+    student_history_arrears: bool = os.getenv("STUDENT_HISTORY_ARREARS", "true").lower() in ("true", "1", "yes")
     
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")

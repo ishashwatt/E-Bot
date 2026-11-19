@@ -20,7 +20,7 @@ class ThreadTracker:
         received_at: Optional[datetime] = None,
         thread_id: Optional[str] = None
     ) -> Tuple[EmailThread, bool]:
-        clean_sub = re.sub(r'^(Re|RE|Fwd|FWD|fwd|re):\s*', '', subject, flags=re.IGNORECASE).strip()
+        clean_sub = re.sub(r'^(?:(?:re|fwd|fw|updated\s+job\s+location\s*-\s*)\b\s*[:\-]?\s*)+', '', subject, flags=re.IGNORECASE).strip()
         
         # Determine consistent thread key
         if not thread_id:
@@ -32,6 +32,14 @@ class ThreadTracker:
                 thread_id = f"th_{hashlib.md5(sub_norm.encode('utf-8')).hexdigest()[:12]}"
 
         thread = db.query(EmailThread).filter(EmailThread.thread_id == thread_id).first()
+        if not thread and detected_company:
+            # Check if there is an active thread for this exact company
+            thread = (
+                db.query(EmailThread)
+                .filter(EmailThread.company_name.ilike(detected_company.strip()))
+                .order_by(EmailThread.latest_received_at.desc())
+                .first()
+            )
         is_new = False
         
         if not thread:
@@ -78,7 +86,13 @@ class ThreadTracker:
             {
                 "subject": m.subject,
                 "body": m.body_text or "",
-                "received_at": m.received_at.isoformat() if m.received_at else ""
+                "received_at": m.received_at.isoformat() if m.received_at else "",
+                "category": m.category,
+                "priority": m.priority,
+                "eligibility_status": m.eligibility_status,
+                "eligibility_notes": m.eligibility_notes,
+                "reason": m.reason,
+                "company_name": m.company_name
             }
             for m in messages
         ]

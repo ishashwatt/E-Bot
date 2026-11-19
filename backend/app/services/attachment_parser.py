@@ -151,6 +151,43 @@ class AttachmentParser:
             result["text"] = f"Error reading CSV: {str(e)}"
         return result
 
+    @staticmethod
+    def parse_xls(file_path: str, search_terms: List[str]) -> Dict[str, Any]:
+        result = {
+            "text": "",
+            "total_pages": 1,
+            "matches": [],
+            "preview": ""
+        }
+        if not os.path.exists(file_path):
+            return result
+        try:
+            import xlrd
+            wb = xlrd.open_workbook(file_path)
+            text_lines = []
+            for sheet in wb.sheets():
+                text_lines.append(f"--- Sheet: {sheet.name} ---")
+                for row_idx in range(sheet.nrows):
+                    row = sheet.row_values(row_idx)
+                    row_str = " | ".join([str(c).strip() for c in row if c is not None and str(c).strip() != ""])
+                    if not row_str:
+                        continue
+                    text_lines.append(row_str)
+                    for term in search_terms:
+                        if term and re.search(re.escape(term), row_str, re.IGNORECASE):
+                            result["matches"].append({
+                                "term": term,
+                                "sheet": sheet.name,
+                                "row": row_idx + 1,
+                                "snippet": row_str[:200]
+                            })
+            full_text = "\n".join(text_lines)
+            result["text"] = full_text
+            result["preview"] = full_text[:1000]
+        except Exception as e:
+            result["text"] = f"Error reading XLS file: {str(e)}"
+        return result
+
     @classmethod
     def parse_attachment(cls, file_path: str, search_terms: List[str]) -> Dict[str, Any]:
         ext = os.path.splitext(file_path)[1].lower()
@@ -158,8 +195,12 @@ class AttachmentParser:
             return cls.parse_pdf(file_path, search_terms)
         elif ext in [".xlsx", ".xlsm"]:
             return cls.parse_excel(file_path, search_terms)
+        elif ext == ".xls":
+            return cls.parse_xls(file_path, search_terms)
         elif ext in [".csv", ".tsv", ".txt"]:
             return cls.parse_csv(file_path, search_terms)
+        elif ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".zip", ".tar", ".gz", ".7z"]:
+            return {"text": "", "total_pages": 1, "matches": [], "preview": f"[Image / Media Attachment: {os.path.basename(file_path)}]"}
         else:
             try:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -176,4 +217,8 @@ class AttachmentParser:
                     }
             except Exception as e:
                 return {"text": f"Error: {e}", "total_pages": 0, "matches": [], "preview": ""}
+
+    # Alias for live_mail_sync compatibility
+    parse_and_search = parse_attachment
+
 

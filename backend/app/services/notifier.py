@@ -46,20 +46,47 @@ class NotificationManager:
     def send_telegram_alert(message_text: str, bot_token: Optional[str] = None, chat_id: Optional[str] = None) -> bool:
         """
         Sends free instant mobile notification to Telegram bot from .env.
+        Includes robust retry: if Telegram rejects HTML entities (HTTP 400),
+        it strips formatting and delivers the message in plain text.
         """
         token = bot_token or settings.telegram_bot_token
         chat = chat_id or settings.telegram_chat_id
-        if not token or not chat:
+        if not token or not chat or not message_text:
             return False
+
+        import re
+
+        # Telegram limit is 4096 characters
+        truncated_msg = message_text if len(message_text) <= 4000 else message_text[:3950] + "\n\n...[Truncated]"
+
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
         try:
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            # 1. First attempt: HTML formatted message
             payload = {
                 "chat_id": chat,
-                "text": message_text,
-                "parse_mode": "HTML"
+                "text": truncated_msg,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True
             }
-            res = requests.post(url, json=payload, timeout=6)
-            return res.status_code == 200
+            res = requests.post(url, json=payload, timeout=12)
+            if res.status_code == 200:
+                return True
+
+            logger.warning(f"Telegram HTML send returned status {res.status_code}: {res.text}. Falling back to plain text.")
+
+            # 2. Fallback: Strip HTML tags and send plain text
+            plain_text = re.sub(r'<[^>]+>', '', truncated_msg)
+            plain_payload = {
+                "chat_id": chat,
+                "text": plain_text,
+                "disable_web_page_preview": True
+            }
+            res_plain = requests.post(url, json=plain_payload, timeout=12)
+            if res_plain.status_code == 200:
+                return True
+            else:
+                logger.error(f"Telegram plain text send failed {res_plain.status_code}: {res_plain.text}")
+                return False
         except Exception as e:
             logger.error(f"Failed to send Telegram alert: {e}")
             return False

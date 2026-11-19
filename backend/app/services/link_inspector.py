@@ -128,7 +128,9 @@ class LinkInspector:
             return result
         
         sheet_id = m.group(1)
-        csv_export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv"
+        gid_match = re.search(r'[#\?&]gid=([0-9]+)', sheet_url)
+        gid_param = f"&gid={gid_match.group(1)}" if gid_match else ""
+        csv_export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv{gid_param}"
 
         try:
             res = requests.get(csv_export_url, timeout=7, headers={"User-Agent": "Mozilla/5.0"})
@@ -239,6 +241,28 @@ class LinkInspector:
                                     })
                     except Exception as e:
                         logger.debug(f"Could not parse downloaded stream as CSV: {e}")
+
+                elif "pdf" in content_type or download_url.endswith(".pdf"):
+                    try:
+                        import pypdf
+                        reader = pypdf.PdfReader(io.BytesIO(res.content))
+                        for page_idx, page in enumerate(reader.pages, start=1):
+                            page_text = page.extract_text() or ""
+                            for term in search_terms:
+                                if term and re.search(r'\b' + re.escape(term) + r'\b', page_text, re.IGNORECASE):
+                                    result["has_match"] = True
+                                    venue_m = re.search(r'\b(LC\s*\d{3}|SJT\s*\d{3}|CDC\s*\d{3}|MB\s*\d{3}|AB\s*\d{3}|Lab\s*\d{1,2})\b', page_text, re.IGNORECASE)
+                                    slot_m = re.search(r'\b(Slot\s*\d|Batch\s*\d|Slot\s*[1-5]\s*(?:is|at)?\s*[\d\.:\s]*(?:am|pm|noon)?)\b', page_text, re.IGNORECASE)
+                                    result["matches"].append({
+                                        "term": term,
+                                        "source": f"Online PDF File (Page {page_idx})",
+                                        "row": page_idx,
+                                        "snippet": f"Found on Page {page_idx}",
+                                        "venue": venue_m.group(1) if venue_m else None,
+                                        "slot": slot_m.group(1) if slot_m else None
+                                    })
+                    except Exception as e:
+                        logger.debug(f"Could not parse downloaded stream as PDF: {e}")
         except Exception as e:
             logger.warning(f"Failed to fetch online drive/direct file {url}: {e}")
 
