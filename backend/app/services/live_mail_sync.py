@@ -180,12 +180,24 @@ class LiveMailSyncService:
             target_ids.reverse()
 
             applied_list = [c.company_name for c in db.query(AppliedCompany).all()]
+            is_cold_boot = (db.query(EmailMessage).count() == 0)
+            if is_cold_boot:
+                logger.info("Cold boot / clean database detected: Ingesting recent emails silently without broadcasting alerts.")
 
             for m_id in target_ids:
                 try:
-                    res, msg_data = mail.fetch(m_id, "(RFC822)")
+                    res, msg_data = mail.fetch(m_id, "(FLAGS RFC822)")
                     if res != "OK" or not msg_data or not msg_data[0]:
                         continue
+
+                    is_seen = False
+                    for item in msg_data:
+                        if isinstance(item, bytes) and b"\\Seen" in item:
+                            is_seen = True
+                            break
+                        elif isinstance(item, tuple) and len(item) > 0 and isinstance(item[0], bytes) and b"\\Seen" in item[0]:
+                            is_seen = True
+                            break
 
                     raw_email = msg_data[0][1]
                     msg = email.message_from_bytes(raw_email)
@@ -368,8 +380,16 @@ class LiveMailSyncService:
                     if final_company:
                         ThreadTracker.update_company_status_from_thread(db, final_company, evaluation, subject)
 
-                    # Send Telegram Notification
-                    if evaluation.get("telegram_notify") and evaluation.get("telegram_message"):
+                    # Send Telegram Notification with deduplication and cold-boot guards
+                    email_age_seconds = (datetime.utcnow() - received_dt).total_seconds()
+                    should_send_telegram = (
+                        evaluation.get("telegram_notify")
+                        and evaluation.get("telegram_message")
+                        and not is_cold_boot
+                        and (not is_seen or email_age_seconds < 900)
+                    )
+
+                    if should_send_telegram:
                         new_alerts += 1
                         try:
                             notifier.send_telegram_alert(evaluation["telegram_message"])
@@ -377,7 +397,7 @@ class LiveMailSyncService:
                             logger.error(f"Failed to dispatch telegram notification: {tg_ex}")
 
                     # Trigger In-App Sound and Broadcast WebSockets
-                    if evaluation.get("trigger_sound"):
+                    if evaluation.get("trigger_sound") and not is_cold_boot:
                         sound_choice = profile.custom_sound if profile else "urgent_ping"
                         log_entry = NotificationLog(
                             message_id=msg_uid,

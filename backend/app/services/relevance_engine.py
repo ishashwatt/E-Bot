@@ -493,6 +493,8 @@ class PlainEnglishExplainer:
             return f"{comp} campus drive announced, but you are not eligible ({reason or 'Criteria mismatch'})."
         elif category == "Not Shortlisted for Test / Round":
             return f"Candidate selection list published for {comp}. Your Roll Number was not included."
+        elif category == "Practice / Mock Exam Notice":
+            return f"Voluntary practice / mock assessment announced for {comp} to help prepare for upcoming drives."
         elif "Academic" in category:
             return "Academic / University circular regarding courses, exams, or department schedules."
         return f"Campus notification regarding {comp}."
@@ -687,23 +689,63 @@ class RelevanceEngine:
             f"{subject_lower}\n{clean_body_for_eval[:500].lower()}"
         ))
 
-        is_shortlist_announcement = bool(re.search(
+        is_mock_or_practice = (
+            bool(re.search(
+                r'\b(?:mock\s*test|mock\s*exam|mock\s*interview|practice\s*exam|practice\s*test|'
+                r'practice\s*on\s*expert\s*hire|practice\s*coding\s*round|benchmark\s*exam|'
+                r'practice\s*exams?|hcl\s*practice\s*exams?)\b',
+                f"{subject_lower} {clean_body_for_eval[:500].lower()}"
+            ))
+            and not identity_matches
+        )
+
+        # Check attachment filenames for shortlist/results indicators
+        has_shortlist_attachment = False
+        for att in attachments_data:
+            att_fn = att.get("filename", "").lower()
+            if any(kw in att_fn for kw in ["shortlist", "shortlisted", "selected", "selection", "interview", "eligible_list", "students_list"]):
+                has_shortlist_attachment = True
+                break
+
+        # Check links or body for online sheet shortlist indicators
+        has_shortlist_sheet = False
+        if link_data.get("google_sheets") or link_data.get("google_drive") or link_data.get("direct_excel_csv"):
+            if re.search(r'\b(?:shortlist(?:ed)?|selects?|selected|selection|next\s*round|interview)\b', clean_body_for_eval[:1500], re.IGNORECASE):
+                has_shortlist_sheet = True
+
+        shortlist_regex = (
             r'\b(?:shortlist(?:ed)?(?:\s*candidates?|\s*students?|\s*list)?|'
             r'selection\s*list|selected\s*candidates|selected\s*students|'
             r'final\s*selects|results?\s*(?:of|announced|declared)|'
-            r'ppo\s*selection\s*list|congratulations.*selection)\b',
-            subject_lower
-        )) and not is_registration_drive
+            r'ppo\s*selection\s*list|congratulations.*selection|'
+            r'next\s*round\s*(?:of\s*selection(?:\s*process)?)?|'
+            r'interview\s*round|interview\s*schedule|interviews?\s*(?:is|are)?\s*scheduled|'
+            r'attached\s*(?:students?\s*)?shortlisted\s*list|attached\s*shortlisted\s*students|'
+            r'shortlisted\s*students\s*list|shortlist\s*for\s*.*is\s*below|'
+            r'find\s*the\s*attached\s*(?:shortlisted|students\s*shortlisted)|'
+            r'list\s*of\s*shortlisted|candidates\s*shortlisted|students\s*shortlisted|'
+            r'online\s*test\s*is\s*scheduled\s*on.*shortlist)\b'
+        )
+
+        is_shortlist_announcement = (
+            (
+                bool(re.search(shortlist_regex, subject_lower))
+                or bool(re.search(shortlist_regex, clean_body_for_eval[:1500].lower()))
+                or has_shortlist_attachment
+                or has_shortlist_sheet
+            )
+            and not is_mock_or_practice
+        )
 
         is_ppt = (
             bool(re.search(r'\b(?:pre-?placement\s*talk|ppt\b|orientation\s*session|information\s*session)\b', subject_lower))
             or bool(re.search(r'\b(?:online\s*pre-?placement\s*talk|join\s*the\s*(?:ppt|pre-?placement\s*talk)|pre-?placement\s*talk\s*is\s*scheduled)\b', clean_body_for_eval.lower()))
-        ) and not is_registration_drive and not is_shortlist_announcement
+        ) and not is_registration_drive and not is_shortlist_announcement and not is_mock_or_practice
 
         is_non_cdc = (
             bool(re.search(r'\b(?:non\s*cdc\s*offers?|restricted\s*offers?|cyber\s*job)\b', subject_lower))
             or (is_cdc_sender and bool(re.search(r'\b(?:non\s*cdc\s*offers?|restricted\s*offers?|in\s*god\s*bless\s*you\s*mails?|unplaced\s*(?:students\s*)?only)\b', clean_body_for_eval.lower())))
-        ) and not is_shortlist_announcement and not is_registration_drive
+        ) and not is_shortlist_announcement and not is_registration_drive and not is_mock_or_practice
 
         is_academic_notice = bool(re.search(
             r'\b(?:virtual\s*seminar|seminar|webinar|workshop|guest\s*lecture|symposium|conference|'
@@ -905,10 +947,32 @@ class RelevanceEngine:
                 "ℹ️ <b>NOT SHORTLISTED</b>\n",
                 f"• 🏢 <b>Company:</b> <code>{comp_esc}</code>",
                 f"• 💼 <b>Role:</b> <b>{role_esc}</b>",
-                f"• 📋 <b>Result:</b> Candidate selection list published, but your Roll No (<code>{escape_html(roll_no)}</code>) was <b>not found</b> in the list.",
+                f"• 📋 <b>Result:</b> Candidate selection / shortlist published for this round, but your Roll No (<code>{escape_html(roll_no)}</code>) was <b>not found</b> in the list.",
                 f"• 📅 <b>Published Date:</b> <b>{escape_html(primary_date)}</b>",
                 f"• 🏫 <b>Campus:</b> <b>{campus_esc}</b>",
-                "• ⚡ <b>Action Required:</b> No action needed. Continue preparing for upcoming placement opportunities."
+                "• ⚡ <b>Action Required:</b> No action needed. You were not shortlisted for this round. Keep preparing for upcoming opportunities."
+            ]
+            evaluation["telegram_message"] = "\n".join(msg_lines)
+            return evaluation
+
+        # =========================================================================
+        # CASE 5B: 📢 PRACTICE / MOCK EXAM NOTICE (Voluntary Practice Session)
+        # =========================================================================
+        if is_mock_or_practice:
+            evaluation["priority"] = "Medium"
+            evaluation["category"] = "Practice / Mock Exam Notice"
+            evaluation["trigger_sound"] = False
+            evaluation["telegram_notify"] = True
+            evaluation["reason"] = f"📢 Practice / Mock Session: {detected_company or 'Practice Exam'}"
+            evaluation["plain_english_summary"] = PlainEnglishExplainer.explain("Practice / Mock Exam Notice", detected_company)
+
+            msg_lines = [
+                "📢 <b>PRACTICE / MOCK EXAM NOTICE</b>\n",
+                f"• 🏢 <b>Company / Topic:</b> <code>{comp_esc}</code>",
+                f"• 📋 <b>Details:</b> Voluntary practice / mock assessment announced to help students prepare for upcoming recruitment drives.",
+                f"• 📅 <b>Date & Time:</b> <b>{sched_esc}</b>",
+                f"• 🏫 <b>Venue / Platform:</b> <b>{campus_esc}</b>",
+                "• ⚡ <b>Action Required:</b> This is optional practice (not an official selection drive). Attend if you wish to practise."
             ]
             evaluation["telegram_message"] = "\n".join(msg_lines)
             return evaluation
@@ -1238,6 +1302,8 @@ class RelevanceEngine:
 
         # 3. Known Companies check (Subject first, then Body)
         KNOWN_COMPANIES = [
+            "HCLTech", "HCL Tech", "HCL", "Synopsys", "Hitachi", "Salesforce", "Threatcop",
+            "Yaanendriya Inc", "Yaanendriya", "Aethrone Aerospace",
             "Deloitte", "Celebal", "HP", "Mobolutions", "Human Resocia", "Schneider Electric",
             "Tresvista", "Embitel", "Alcatel", "Infosys", "Myntra", "Capgemini", "Palo Alto",
             "Citi India", "Masal.ai", "MASAL AI", "LTIMindtree", "Virtusa", "TCS", "Wipro", "Amazon",
@@ -1252,7 +1318,9 @@ class RelevanceEngine:
                 return comp
 
         if has_placement_kw:
-            body_norm = re.sub(r'[\s\xa0]+', ' ', body[:3000])
+            # Strip URLs before scanning body to prevent docs.google.com from matching Google
+            body_no_urls = re.sub(r'https?://\S+', ' ', body[:3000])
+            body_norm = re.sub(r'[\s\xa0]+', ' ', body_no_urls)
             for comp in KNOWN_COMPANIES:
                 if re.search(r'\b' + re.escape(comp) + r'\b', body_norm, re.IGNORECASE):
                     return comp

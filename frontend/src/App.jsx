@@ -108,6 +108,15 @@ export default function App() {
         accentColor: 'var(--accent-violet)'
       };
     }
+    if (item.category === 'Practice / Mock Exam Notice') {
+      return {
+        label: '📢 Practice / Mock Exam',
+        className: 'badge-medium',
+        border: '4px solid #6366f1',
+        accentBg: '#e0e7ff',
+        accentColor: '#4338ca'
+      };
+    }
     if (item.category?.includes('Academic') || item.category?.includes('Program Chair')) {
       return {
         label: '🏛️ Academic Notice',

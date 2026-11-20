@@ -7,6 +7,11 @@ from app.services.live_mail_sync import start_background_mail_sync
 import uvicorn
 import os
 
+from datetime import datetime
+import logging
+
+logger = logging.getLogger("main")
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -25,15 +30,39 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/api")
 
+async def keep_alive_task():
+    """
+    Periodically self-pings Render external URL every 8 minutes to prevent the free tier service from idling into sleep.
+    """
+    await asyncio.sleep(60)
+    external_url = (
+        os.getenv("RENDER_EXTERNAL_URL")
+        or os.getenv("BACKEND_URL")
+        or "https://e-bot-fa9s.onrender.com"
+    ).rstrip("/")
+    ping_url = f"{external_url}/ping"
+    
+    while True:
+        try:
+            import requests
+            await asyncio.to_thread(requests.get, ping_url, timeout=15)
+        except Exception as e:
+            logger.debug(f"Keep-alive self-ping: {e}")
+        await asyncio.sleep(480)
+
 @app.on_event("startup")
 async def app_startup():
     asyncio.create_task(start_background_mail_sync(interval_seconds=60))
+    asyncio.create_task(keep_alive_task())
 
 @app.get("/")
+@app.get("/ping")
+@app.get("/health")
 def health_check():
     return {
         "status": "online",
         "service": "E-Bot Live Intelligence Engine",
+        "timestamp": datetime.utcnow().isoformat(),
         "mode": "Live Mailbox Synchronization (IMAP / Google Workspace)"
     }
 
